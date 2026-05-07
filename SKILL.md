@@ -1,56 +1,41 @@
 ---
 name: bilingual-pdf-translator
-description: 專業金融 PDF 雙語對照翻譯。將 PDF 轉為「一段英文、一段繁體中文」格式的 TXT 檔，支援台灣金融專業術語，並採原生工具追加模式避免頻繁 Shell 授權彈窗。
+description: 專業金融 PDF 雙語對照翻譯技能 (Silent Orchestrator 模式)。採用自動路徑鎖定與子代理注入邏輯，確保翻译完整且無彈窗干擾。
 ---
 
 # 雙語 PDF 翻譯技能 (Bilingual PDF Translator)
 
-本技能旨在提供一個無縫、完整且符合專業金融語氣的 PDF 翻譯流程。它特別優化了處理大檔案的邏輯，避免觸發 Windows Shell 的頻繁授權彈窗。
+本技能採用進階「指揮官模式」，主 Agent 負責系統級路徑定錨與任務協調，具體翻譯任務由子代理 (`generalist`) 執行，以確保翻譯高品質並維持主 Session 輕量化。
 
-## 適用場景
-- 翻譯美股財報會議紀錄 (Transcripts)。
-- 翻譯金融研究報告、法人說明會投影片。
-- 任何需要高品質中英對照 TXT 輸出的 PDF 文件。
+## 核心原則
+- **自動路徑定錨 (Deterministic Pathing)**：嚴禁 AI 憑直覺拼湊路徑。必須向作業系統獲取 PDF 的真實絕對路徑，確保存檔位置 100% 準確且無需使用者確認。
+- **資訊注入 (Zero-Access Delegation)**：主 Agent 將術語規範直接寫入子代理指令，禁止子代理自行存取全域檔案，從根本上消滅 Python/Shell 授權彈窗。
+- **嚴禁摘要 (No Summary)**：主體任務為「全文逐段對照翻譯」。嚴禁以總結取代譯文，必須確保原文每一段都有對應中文。
 
-## 執行流程 (SOP) - 靜音指揮官 (Silent Orchestrator)
+## 執行流程 (SOP)
 
-### 1. 任務啟動與術語預讀
-- **全局分析**：提取公司名稱、財報年度/季度、會議日期。
-- **術語全量提取**：**主 Agent 必須先讀取** [references/financial-glossary.md](references/financial-glossary.md) 與 [references/tone-guide.md](references/tone-guide.md) 的全文內容。
-- **建立檔案**：寫入 CTH Banner 並留存 `[APPEND_MARKER]`。
+### Phase 1: 系統級路徑定錨 (Pre-flight)
+1. **獲取絕對路徑**：主 Agent 對 PDF 執行 `list_directory` 或系統指令，獲取其完整的 **Full Path**。
+2. **定義唯一目標**：將 Full Path 的 `.pdf` 替換為 `_translated.txt`，定義為唯一的 **[TARGET_PATH]**。
+3. **初始化檔案**：直接在 **[TARGET_PATH]** 建立檔案，寫入 CTH Banner 與 Metadata（公司、季度、日期），並留存 `[APPEND_MARKER]`。
 
-### 2. 注入式委派 (Zero-Access Delegation)
-為了避免子代理觸發 Shell/Python 授權請求，主 Agent 在調用 `invoke_agent` 時應將術語規範**直接寫入指令**中。
-> **子代理指令範本：**
-> 「你是專業翻譯員。任務：翻譯 PDF 第 [X-Y] 頁。
-> **已讀取術語規範（請直接遵守）：**
-> [在此貼入術語表全文內容]
-> **執行規範：**
-> - **嚴禁自行讀取路徑下的術語檔案，避免觸發 Shell 授權。**
-> - **嚴禁摘要，必須逐段全文對照。**
-> - 使用 `replace` 替換 `[APPEND_MARKER]`。」
+### Phase 2: 注入式子代理委派 (Silent Delegation)
+1. **規則預讀**：主 Agent 讀取 `financial-glossary.md` 與 `tone-guide.md`。
+2. **指派任務**：以 **2 頁** 為單位循環，調用 `invoke_agent` 傳遞以下注入式指令：
+   > **子代理指令範本：**
+   > 「你是專業翻譯機器人。任務：翻譯 PDF 第 [X-Y] 頁。
+   > **絕對存檔路徑：[TARGET_PATH]**
+   > **已注入規則（請直接遵守，禁止讀取外部檔）：**
+   > - 術語：[在此貼入術語表精華，特別是保留英文部分]
+   > - 格式：英文段落 \n 繁體中文譯文。
+   > - **嚴禁摘要，必須全文翻譯。**
+   > - 使用 `replace` 替換 `[APPEND_MARKER]` 為『譯文 + [APPEND_MARKER]』。」
 
-### 3. 進度與回報 (Status Sync)
-- 每一輪結束後，主 Agent 應向使用者廣播進度（如：`✅ 已完成第 2 頁 (11%)`）。
-- **異常防範**：若子代理回報錯誤，主 Agent 應告知具體頁數。
-
-### 4. 全文校驗與收尾
-- 移除 `[APPEND_MARKER]` 前進行最終掃描。
-- 提供最終路徑與統計報告。
-
+### Phase 3: 透明進度與最終校驗
+1. **進度廣播**：每一輪結束，主 Agent 向使用者報告：`✅ 已完成第 [N/M] 頁 ([百分比])`。
+2. **完整性掃描**：翻譯結束後，主 Agent 掃描 **[TARGET_PATH]**，確認無遺漏段落或流程標記。
+3. **標記清理**：移除最後的 `[APPEND_MARKER]` 並提供最終檔案連結。
 
 ## 注意事項
-- **Session 減壓**：透過 `invoke_agent` 執行的翻譯內容不會擠爆主對話的歷史，這能維持主 Agent 的邏輯判斷力。
-- **禁止偷懶**：指令必須強調「翻譯員」身份，切斷其總結或摘要的傾向。
-- **原生工具**：所有子代理必須使用 `replace` 以避免彈出 Shell 授權視窗。
-
-
-### 4. 自我校對與完工 (Self-Correction)
-- **格式檢查**：確認發言者標註（如 Q/A）是否符合 [references/tone-guide.md](references/tone-guide.md)。
-- **完整性檢查**：使用 `grep_search` 確認檔案中無遺留的長段英文或流程標記。
-- 刪除最終的 `[APPEND_MARKER]`。
-
-## 注意事項
-- **禁止使用 Shell 指令**：除非 `write_file` 或 `replace` 失敗，否則嚴禁調用 `run_shell_command` 的 `Add-Content` 或是 `Out-File`。
-- **OCR 修正**：讀取 PDF 時，若發現 OCR 產生的文字有明顯錯誤（如拼錯公司名），請在翻譯時主動修正。
-- **金融術語**：若遇到 [references/financial-glossary.md](references/financial-glossary.md) 未收錄的術語，應優先參考台灣主要金融媒體（如鉅亨網、工商時報）的用法。
+- **禁止使用 Shell 指令**：除非原生工具失敗，否則嚴禁調用 `Add-Content` 等指令。
+- **跨公司通用**：若目錄下有 `CONTEXT.md`，主 Agent 應優先讀取並將其內容一同注入給子代理。
